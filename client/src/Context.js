@@ -37,7 +37,7 @@ const ContextProvider = ({ children }) => {
         socket.on('me', (id) => setMe(id));
 
         // signal 
-        socket.on('callUser', ({ from, name: callerName, signal}) => { 
+        socket.on('callUser', ({ from, name: callerName, signal }) => { 
             setCall({ isReceivingCall: true, from, name: callerName, signal });
         });
     }, []);
@@ -80,7 +80,7 @@ const ContextProvider = ({ children }) => {
         connectionRef.current = peer;
     };
 
-    const leaveCall = () => {
+    const leaveCall = () => {        
         setCallEnded(true);
 
         connectionRef.current.destroy();
@@ -97,4 +97,3 @@ const ContextProvider = ({ children }) => {
 }
 
 export { ContextProvider, SocketContext };
-
