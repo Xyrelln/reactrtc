@@ -4,7 +4,7 @@ import cv2
 import base64
 
 
-def stream_video_to_websocket(cap, url='localhost', port=8765):
+def stream_video_to_websocket(cap, url: str = 'localhost', port: int = 8765):
     async def send_video_frame(websocket, cap):
         while cap.isOpened():
             success, frame = cap.read()
@@ -17,7 +17,7 @@ def stream_video_to_websocket(cap, url='localhost', port=8765):
             frame_base64 = base64.b64encode(buffer).decode('utf-8')
 
             await websocket.send(frame_base64)
-            await asyncio.sleep(0.03)  # Adjust this value to control the frame rate
+            await asyncio.sleep(0.015)  # Adjust this value to control the frame rate
 
         cap.release()
         
