@@ -27,11 +27,6 @@ function createPeerConnection() {
     }, false);
     iceGatheringLog.textContent = pc.iceGatheringState;
 
-    pc.addEventListener('iceconnectionstatechange', function() {
-        iceConnectionLog.textContent += ' -> ' + pc.iceConnectionState;
-    }, false);
-    iceConnectionLog.textContent = pc.iceConnectionState;
-
     pc.addEventListener('signalingstatechange', function() {
         signalingLog.textContent += ' -> ' + pc.signalingState;
     }, false);
@@ -49,9 +44,9 @@ function createPeerConnection() {
 }
 
 function negotiate() {
-    return pc.createOffer().then(function(offer) {
+    return pc.createOffer().then(offer => {
         return pc.setLocalDescription(offer);
-    }).then(function() {
+    }).then(e => {
         // wait for ICE gathering to complete
         return new Promise(function(resolve) {
             if (pc.iceGatheringState === 'complete') {
@@ -84,8 +79,7 @@ function negotiate() {
         return fetch('/offer', {
             body: JSON.stringify({
                 sdp: offer.sdp,
-                type: offer.type,
-                video_transform: document.getElementById('video-transform').value
+                type: offer.type
             }),
             headers: {
                 'Content-Type': 'application/json'
