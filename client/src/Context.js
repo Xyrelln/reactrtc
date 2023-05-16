@@ -1,97 +1,171 @@
 import React, { createContext, useState, useRef, useEffect } from 'react';
 import { io } from 'socket.io-client';
-import Peer from 'simple-peer';
 
 const SocketContext = createContext();
 
 const SERVER_PORT = 3001;
-const socket = io(`http://localhost:${SERVER_PORT}`);  // debug: server_port obtainment should be async function
+const socket = io(`http://localhost:${SERVER_PORT}`); // signalling server socket.on('connection')
 
 const ContextProvider = ({ children }) => {
-    const [stream, setStream] = useState(null);
-    const [me, setMe] = useState('');
-    const [call, setCall] = useState({});
-    const [callAccepted, setCallAccepted] = useState(false);
-    const [callEnded, setCallEnded] = useState(false);
-    const [name, setName] = useState('');
+  const [stream, setStream] = useState(null);
+  const [me, setMe] = useState('');
+  const [call, setCall] = useState({});
+  const [callAccepted, setCallAccepted] = useState(false);
+  const [callEnded, setCallEnded] = useState(false);
+  const [name, setName] = useState('');
 
-    const myVideo = useRef();
-    const userVideo = useRef();
-    const connectionRef = useRef();
+  const myVideo = useRef();
+  const userVideo = useRef();
+  const connectionRef = useRef();
 
+  // initialization, request camera & mic, and set the given stream to myVideo
+  useEffect(() => {
+    navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      })
+      .then((currentStream) => {
+        setStream(currentStream);
+        myVideo.current.srcObject = currentStream;
+      });
 
-    // initialization, request camera & mic, and set the given stream to myVideo
-    useEffect(() => {
+    socket.on('me', (id) => setMe(id));
 
-        navigator.mediaDevices.getUserMedia({ 
-            video: true, 
-            audio: true 
-        })
-        .then((currentStream) => {
-            setStream(currentStream);             
-            myVideo.current.srcObject = currentStream;
-        });
-            
-        socket.on('me', (id) => setMe(id));
+    // signal
+    socket.on('callUser', ({ from, name: callerName, signal }) => {
+      setCall({ isReceivingCall: true, from, name: callerName, signal });
+    });
+  }, []);
 
-        // signal 
-        socket.on('callUser', ({ from, name: callerName, signal }) => { 
-            setCall({ isReceivingCall: true, from, name: callerName, signal });
-        });
-    }, []);
+  const answerCall = () => {
+    setCallAccepted(true);
 
-    const answerCall = () => {
-        setCallAccepted(true);
-       
-        const peer = new Peer({ initiator: false, trickle: false, stream });
+    const peerConnection = new RTCPeerConnection();
 
-        peer.on('signal', (data) => {
-            socket.emit('answerCall', { signal: data, to: call.from });
-        });
-
-        peer.on('stream', (currentStream) => {
-            userVideo.current.srcObject = currentStream;
-        });
-
-        peer.signal(call.signal);
-
-        connectionRef.current = peer;
+    peerConnection.ontrack = ({ streams: [currentStream] }) => {
+      userVideo.current.srcObject = currentStream;
     };
 
-    const callUser = (id) => {
-        const peer = new Peer({ initiator: true, trickle: false, stream });
-
-        peer.on('signal', (data) => {
-            socket.emit('callUser', { userToCall: id, signalData: data, from: me, name });
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('sendIceCandidate', {
+          candidate: event.candidate,
+          to: call.from,
         });
-
-        peer.on('stream', (currentStream) => {
-            userVideo.current.srcObject = currentStream;
-        });
-
-        socket.on('callAccepted', (signal) => {
-            setCallAccepted(true);
-
-            peer.signal(signal);
-        });
-
-        connectionRef.current = peer;
+      }
     };
 
-    const leaveCall = () => {        
-        setCallEnded(true);
+    socket.on('receiveIceCandidate', ({ candidate }) => {
+      peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    });
 
-        connectionRef.current.destroy();
-        
-        window.location.reload();
+    stream
+      .getTracks()
+      .forEach((track) => peerConnection.addTrack(track, stream));
+
+    peerConnection
+      .setRemoteDescription(new RTCSessionDescription(call.signal))
+      .then(() => {
+        peerConnection
+          .createAnswer()
+          .then((answer) => {
+            peerConnection.setLocalDescription(answer).then(() => {
+              socket.emit('answerCall', {
+                signal: peerConnection.localDescription,
+                to: call.from,
+              });
+            });
+          })
+          .catch((error) => console.error('Error creating answer:', error));
+      });
+  };
+
+  const callUser = (id) => {
+    const peerConnection = new RTCPeerConnection();
+    const dc = peerConnection.createDataChannel('channel')
+
+    dc.onmessage = message => {
+      console.log('Message from remote: ' + message.data)
+    }
+
+    dc.onopen = e => {
+      console.log('datachannel opened!')
+      dc.send('sup python peer')
+    }
+
+    stream
+      .getTracks()
+      .forEach((track) => peerConnection.addTrack(track, stream));
+
+    peerConnection.ontrack = ({ streams: [currentStream] }) => {
+      console.log('track received')
+      userVideo.current.srcObject = currentStream;
     };
 
-    return(
-        <SocketContext.Provider value={{ call, callAccepted, myVideo, userVideo, stream, name, setName, callEnded, me, callUser, leaveCall, answerCall, }}>
-            { children }
-        </SocketContext.Provider>
-    )
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('sendIceCandidate', {
+          candidate: event.candidate,
+          to: id,
+        });
+      }
+    };
 
-}
+    socket.on('receiveIceCandidate', ({ candidate }) => {
+      peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
+    peerConnection
+      .createOffer()
+      .then((offer) => {
+        peerConnection.setLocalDescription(offer).then(() => {
+          socket.emit('callUser', {
+            userToCall: id,
+            signalData: peerConnection.localDescription,
+            from: me,
+            name,
+          });
+        });
+      })
+      .catch((error) => console.error('Error creating offer:', error));
+
+    socket.on('callAccepted', (signal) => {
+      setCallAccepted(true);
+      peerConnection.setRemoteDescription(new RTCSessionDescription(JSON.parse(signal)));
+    });
+
+    connectionRef.current = peerConnection;
+  };
+
+  const leaveCall = () => {
+    setCallEnded(true);
+
+    connectionRef.current.close();
+    connectionRef.current = null;
+
+    window.location.reload();
+  };
+
+  return (
+    <SocketContext.Provider
+      value={{
+        call,
+        callAccepted,
+        myVideo,
+        userVideo,
+        stream,
+        name,
+        setName,
+        callEnded,
+        me,
+        callUser,
+        leaveCall,
+        answerCall,
+      }}
+    >
+      {children}
+    </SocketContext.Provider>
+  );
+};
 
 export { ContextProvider, SocketContext };

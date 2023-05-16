@@ -1,42 +1,41 @@
-const app = require('express')();
+const express = require('express');
+const app = express();
 const server = require('http').createServer(app);
-const cors = require('cors');
-
 const io = require('socket.io')(server, {
-    cors: {
-        origin: '*',
-        methods: ['GET', 'POST']
-    }
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
 });
-
-app.use(cors());
 
 const PORT = 3001;
 
 app.get('/', (req, res) => {
-    res.send('Running');
+  res.send('Server is running.');
 });
 
 io.on('connection', (socket) => {
-    socket.emit('me', socket.id);
+  socket.emit('me', socket.id);
 
-    socket.on('disconnect', () => {
-        socket.broadcast.emit('callEnded');
-    })
+  socket.on('disconnect', () => {
+    socket.broadcast.emit('callEnded');
+  });
 
-    socket.on('callUser', ({ userToCall, signalData, from, name }) => {
-        io.to(userToCall).emit('callUser', { signal: signalData, from, name });
-    })
+  socket.on('callUser', ({ userToCall, signalData, from, name }) => {
+    io.to(userToCall).emit('callUser', {
+      signal: signalData,
+      from,
+      name,
+    });
+  });
 
-    socket.on('answerCall', (data) => {
-        io.to(data.to).emit('callAccepted', data.signal);
-    })
+  socket.on('answerCall', ({ signal, to }) => {
+    io.to(to).emit('callAccepted', signal);
+  });
 
-    socket.on("connect_error", (error) => {
-        console.log(`connect_error due to ${error.message}`);
-    })
-})
+  socket.on('sendIceCandidate', ({ candidate, to }) => {
+    io.to(to).emit('receiveIceCandidate', { candidate });
+  });
+});
 
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-})
+server.listen(PORT, () => console.log(`Server is listening on port ${PORT}`));
