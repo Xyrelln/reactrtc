@@ -13,7 +13,7 @@ const App = () => {
     return (
         <div className={classes.wrapper}>
             <AppBar className={classes.appBar} position="static" color="inherit">
-                <Typography variant="h4" align="center">WEBRTC Prototype</Typography>   
+                <Typography variant="h4" align="center">Cloud Yolo Demo</Typography>   
             </AppBar>
             <VideoPlayer />
             <Sidebar>

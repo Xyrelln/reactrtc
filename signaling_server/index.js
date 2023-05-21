@@ -29,8 +29,8 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('answerCall', ({ signal, to }) => {
-    io.to(to).emit('callAccepted', signal);
+  socket.on('answerCall', ({ signal, id, to }) => {
+    io.to(to).emit('callAccepted', { signal, id });
   });
 
   socket.on('sendIceCandidate', ({ candidate, to }) => {

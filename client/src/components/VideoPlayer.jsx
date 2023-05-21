@@ -13,7 +13,7 @@ const VideoPlayer = () => {
       {stream && (
         <Paper className={classes.paper}>
           <Grid item xs={12} md={6}>
-            <Typography varient="h5" gutterBottom>{name || 'Name'}</Typography>
+            <Typography varient="h5" gutterBottom>{name || 'Local'}</Typography>
             <video playsInline muted ref={myVideo} autoPlay className={classes.video} />
           </Grid>
         </Paper>
@@ -21,7 +21,7 @@ const VideoPlayer = () => {
       {callAccepted && !callEnded && (
         <Paper className={classes.paper}>
           <Grid item xs={12} md={6}>
-            <Typography varient="h5" gutterBottom>{call.name || 'Name'}</Typography>
+            <Typography varient="h5" gutterBottom>{call.name || 'Remote'}</Typography>
             <video playsInline ref={userVideo} autoPlay className={classes.video} />
           </Grid>
         </Paper>

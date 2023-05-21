@@ -29,7 +29,10 @@ const ContextProvider = ({ children }) => {
         myVideo.current.srcObject = currentStream;
       });
 
-    socket.on('me', (id) => setMe(id));
+    socket.on('me', (id) => {
+      setMe(id);
+      setName('Local: ' + id);
+    })
 
     // signal
     socket.on('callUser', ({ from, name: callerName, signal }) => {
@@ -119,6 +122,7 @@ const ContextProvider = ({ children }) => {
       .createOffer()
       .then((offer) => {
         peerConnection.setLocalDescription(offer).then(() => {
+          console.log("js sdp: " + offer)
           socket.emit('callUser', {
             userToCall: id,
             signalData: peerConnection.localDescription,
@@ -129,12 +133,14 @@ const ContextProvider = ({ children }) => {
       })
       .catch((error) => console.error('Error creating offer:', error));
 
-    socket.on('callAccepted', (signal) => {
+    socket.on('callAccepted', ({ signal, id }) => {
       setCallAccepted(true);
+      setCall({ name: `Remote: ${id}`}); 
       peerConnection.setRemoteDescription(new RTCSessionDescription(JSON.parse(signal)));
     });
 
     connectionRef.current = peerConnection;
+
   };
 
   const leaveCall = () => {

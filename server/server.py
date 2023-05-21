@@ -1,172 +1,157 @@
-import argparse
 import asyncio
-import json
-import logging
-import os
-import ssl
-import uuid
-
 import cv2
-from aiohttp import web
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder, MediaRelay
+import numpy as np
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, MediaStreamTrack
+from aiortc import RTCIceServer, RTCConfiguration
 from av import VideoFrame
+from aiortc.contrib.media import MediaPlayer
+import json
+import socketio
+import re
+import configparser, os, pathlib
 from ultralytics import YOLO
 
-ROOT = os.path.dirname(__file__)
+sio = socketio.AsyncClient()
+me = ''
 
-logger = logging.getLogger("pc")
-pcs = set()
-relay = MediaRelay()
+# read config
+conf_path = os.path.join(pathlib.Path(__file__).parent.absolute(), 'server.conf') 
+config = configparser.ConfigParser()
+config.read(conf_path)
+print(config.get('servers', 'signaling_server'))
+SERVER_URL = config.get('servers', 'signaling_server')
+MAX_CONCURRENT_FRAMES = config.getint('processing', 'max_concurrent_frames')
 
 
-class YoloTrack(MediaStreamTrack):
-    """
-    A video stream track that transforms frames from an another track.
-    """
-
-    kind = "video"
-
-    def __init__(self, track, model: str = 'yolov8n.pt'):
-        super().__init__()  # don't forget this!
+class VideoTransformTrack(MediaStreamTrack): # convert to greyscale now, change to yolo later
+    
+    def __init__(self, track, model='yolov8n.pt', max_concurrent_frames=MAX_CONCURRENT_FRAMES):
+        super().__init__()
         self.track = track
-        self.model = YOLO(model)  
+        self.kind = track.kind
+        self.model = YOLO(model)
+        self.semaphore = asyncio.Semaphore(max_concurrent_frames)
 
     async def recv(self):
         frame = await self.track.recv()
-        
-        # process with yolo
-        img = frame.to_ndarray(format="bgr24")
-        cv_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        results = self.model(cv_frame)
-        annotated_frame = results[0].plot()
 
-        # rebuild a VideoFrame, preserving timing information
-        new_frame = VideoFrame.from_ndarray(annotated_frame)
+        img = frame.to_ndarray(format="bgr24")
+
+        # Process with Yolo
+        res = self.model(img)
+        res_plotted = res[0].plot()
+
+        # Return the processed frame
+        new_frame = VideoFrame.from_ndarray(res_plotted, format="bgr24")
         new_frame.pts = frame.pts
         new_frame.time_base = frame.time_base
-
         return new_frame
 
+# Obtain my socket.io id from siganling server
+@sio.on('me')
+async def on_me(my_id):
+    global me
+    me = my_id
+    print(f"My Socket ID: {me}")
 
-async def index(request):
-    content = open(os.path.join(ROOT, "index.html"), "r").read()
-    return web.Response(content_type="text/html", text=content)
+# if somebody calls python server, it answers automatically
+@sio.on('callUser')
+async def on_callUser(data):
+    from_user = data["from"]
+    signal_data = data["signal"]
+    from_name = data["name"]
+
+    print(f"Received call from: {from_user}")
+    print(f"name: {from_name}")
+
+    # Answer the call automatically
+    await answer_call(from_user, signal_data)
 
 
-async def javascript(request):
-    content = open(os.path.join(ROOT, "client.js"), "r").read()
-    return web.Response(content_type="application/javascript", text=content)
+async def answer_call(from_user, signal_data):
 
+    # ice_servers = [
+    #     RTCIceServer(urls='stun:stun.l.google.com:19302')
+    # ]
 
-async def answer(request):
-    params = await request.json()
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+    # config = RTCConfiguration(ice_servers)
 
     pc = RTCPeerConnection()
-    pc_id = "PeerConnection(%s)" % uuid.uuid4()
-    pcs.add(pc)
 
-    def log_info(msg, *args):
-        logger.info(pc_id + " " + msg, *args)
-
-    log_info("Created for %s", request.remote)
-
-    # # prepare local media
-    # player = MediaPlayer(os.path.join(ROOT, "demo-instruct.wav"))
-    if args.record_to:
-        recorder = MediaRecorder(args.record_to)
-    else:
-        recorder = MediaBlackhole()
-
+    # test the js data channel
     @pc.on("datachannel")
-    def on_datachannel(channel):
+    async def on_datachennel(channel):
+        
         @channel.on("message")
         def on_message(message):
-            if isinstance(message, str) and message.startswith("ping"):
-                channel.send("pong" + message[4:])
-            else:
-                channel.send(f"Got a message: {message}")
+            print(f'---> Message from Remote: {message}')
+        
+        @channel.on("open")
+        def on_open(e):
+            print("-----datachennel opened-----")
 
-    @pc.on("connectionstatechange")
-    async def on_connectionstatechange():
-        log_info("Connection state is %s", pc.connectionState)
-        if pc.connectionState == "failed":
-            await pc.close()
-            pcs.discard(pc)
+
+    @pc.on("icecandidate")
+    async def on_icecandidate(candidate):
+        await sio.emit("sendIceCandidate", {"candidate": candidate, "to": from_user})
 
     @pc.on("track")
     def on_track(track):
-        log_info("Track %s received", track.kind)
+        print("Track received:", track.kind)
+        if track.kind == "video":
+            print('a video track found')
+            local_video = VideoTransformTrack(track)
+            print('local video created')
+            pc.addTrack(local_video)
+            print('track added')
+    
+    @sio.on("receiveIceCandidate")
+    async def on_candidate(data):
+        candidate_string = data["candidate"]["candidate"]  # data[candidate] is a dict and looks like this: {'candidate': 'candidate:2806083971 1 udp 2122129151 172.16.55.152 33110 typ host generation 0 ufrag eOBR network-id 2 network-cost 10', 'sdpMid': '0', 'sdpMLineIndex': 0, 'usernameFragment': 'eOBR'}
 
-        pc.addTrack(
-            YoloTrack(
-                relay.subscribe(track)
-            )
-        )
-        if args.record_to:
-            recorder.addTrack(relay.subscribe(track))
+        if candidate_string:
+            candidate_dict = parse_candidate_string(candidate_string)
 
-        @track.on("ended")
-        async def on_ended():
-            log_info("Track %s ended", track.kind)
-            await recorder.stop()
+            if candidate_dict:
+                candidate_dict["sdpMid"] = data["candidate"]["sdpMid"]
+                candidate_dict["sdpMLineIndex"] = data["candidate"]["sdpMLineIndex"]
+                await pc.addIceCandidate(RTCIceCandidate(**candidate_dict))
 
-    # handle offer
-    await pc.setRemoteDescription(offer)
-    await recorder.start()
+    await pc.setRemoteDescription(RTCSessionDescription(**signal_data))
 
-    # send answer
+    
+    # Create answer and set as LocalDescription
     answer = await pc.createAnswer()
+    print(f"Answer: {answer}")
     await pc.setLocalDescription(answer)
 
-    return web.Response(
-        content_type="application/json",
-        text=json.dumps(
-            {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
-        ),
-    )
+    # Send the answer to the signaling server
+    await sio.emit('answerCall', {"signal": json.dumps({'sdp': pc.localDescription.sdp, 'type': pc.localDescription.type}), "id": me, "to": from_user})
 
+def parse_candidate_string(candidate_string):
+    pattern = re.compile(r"candidate:(?P<foundation>\S+) (?P<component>\d+) (?P<transport>\S+) (?P<priority>\d+) (?P<ip>\S+) (?P<port>\d+) typ (?P<type>\S+)(?: generation (?P<generation>\d+))?(?: ufrag (?P<ufrag>\S+))?(?: network-id (?P<network_id>\d+))?(?: network-cost (?P<network_cost>\d+))?")
+    match = pattern.match(candidate_string)
 
-async def on_shutdown(app):
-    # close peer connections
-    coros = [pc.close() for pc in pcs]
-    await asyncio.gather(*coros)
-    pcs.clear()
+    if match:
+        return {
+            "foundation": match.group("foundation"),
+            "component": int(match.group("component")),
+            "protocol": match.group("transport"),
+            "priority": int(match.group("priority")),
+            "ip": match.group("ip"),
+            "port": int(match.group("port")),
+            "type": match.group("type"),
+            # "generation": int(match.group("generation")) if match.group("generation") else None,
+            # "ufrag": match.group("ufrag"),
+            # "network_id": int(match.group("network_id")) if match.group("network_id") else None,
+            # "network_cost": int(match.group("network_cost")) if match.group("network_cost") else None
+        }
+    else:
+        return None
 
+async def main():
+    await sio.connect(SERVER_URL)
+    await sio.wait()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="WebRTC audio / video / data-channels demo"
-    )
-    parser.add_argument("--cert-file", help="SSL certificate file (for HTTPS)")
-    parser.add_argument("--key-file", help="SSL key file (for HTTPS)")
-    parser.add_argument(
-        "--host", default="0.0.0.0", help="Host for HTTP server (default: 0.0.0.0)"
-    )
-    parser.add_argument(
-        "--port", type=int, default=8080, help="Port for HTTP server (default: 8080)"
-    )
-    parser.add_argument("--record-to", help="Write received media to a file."),
-    parser.add_argument("--verbose", "-v", action="count")
-    args = parser.parse_args()
-
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
-    else:
-        logging.basicConfig(level=logging.INFO)
-
-    if args.cert_file:
-        ssl_context = ssl.SSLContext()
-        ssl_context.load_cert_chain(args.cert_file, args.key_file)
-    else:
-        ssl_context = None
-
-    app = web.Application()
-    app.on_shutdown.append(on_shutdown)
-    app.router.add_get("/", index)
-    app.router.add_get("/client.js", javascript)
-    app.router.add_post("/offer", answer)
-    web.run_app(
-        app, access_log=None, host=args.host, port=args.port, ssl_context=ssl_context
-    )
+    asyncio.run(main())
