@@ -22,7 +22,7 @@ const ContextProvider = ({ children }) => {
   useEffect(() => {
     navigator.mediaDevices.getUserMedia({
         video: true,
-        audio: true,
+        audio: false,
       })
       .then((currentStream) => {
         setStream(currentStream);

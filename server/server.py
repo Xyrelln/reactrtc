@@ -1,7 +1,7 @@
 import asyncio
 import cv2
 import numpy as np
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, MediaStreamTrack
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, VideoStreamTrack
 from aiortc import RTCIceServer, RTCConfiguration
 from av import VideoFrame
 from aiortc.contrib.media import MediaPlayer
@@ -9,6 +9,7 @@ import json
 import socketio
 import re
 import configparser, os, pathlib
+import time
 from ultralytics import YOLO
 
 sio = socketio.AsyncClient()
@@ -18,22 +19,21 @@ me = ''
 conf_path = os.path.join(pathlib.Path(__file__).parent.absolute(), 'server.conf') 
 config = configparser.ConfigParser()
 config.read(conf_path)
-print(config.get('servers', 'signaling_server'))
 SERVER_URL = config.get('servers', 'signaling_server')
 MAX_CONCURRENT_FRAMES = config.getint('processing', 'max_concurrent_frames')
 
 
-class VideoTransformTrack(MediaStreamTrack): # convert to greyscale now, change to yolo later
+class VideoTransformTrack(VideoStreamTrack): # convert to greyscale now, change to yolo later
     
-    def __init__(self, track, model='yolov8n.pt', max_concurrent_frames=MAX_CONCURRENT_FRAMES):
+    def __init__(self, track, model='yolov8n.pt',):
         super().__init__()
         self.track = track
         self.kind = track.kind
         self.model = YOLO(model)
-        self.semaphore = asyncio.Semaphore(max_concurrent_frames)
 
     async def recv(self):
         frame = await self.track.recv()
+
 
         img = frame.to_ndarray(format="bgr24")
 
@@ -45,7 +45,9 @@ class VideoTransformTrack(MediaStreamTrack): # convert to greyscale now, change 
         new_frame = VideoFrame.from_ndarray(res_plotted, format="bgr24")
         new_frame.pts = frame.pts
         new_frame.time_base = frame.time_base
+
         return new_frame
+
 
 # Obtain my socket.io id from siganling server
 @sio.on('me')
@@ -73,9 +75,7 @@ async def answer_call(from_user, signal_data):
     # ice_servers = [
     #     RTCIceServer(urls='stun:stun.l.google.com:19302')
     # ]
-
     # config = RTCConfiguration(ice_servers)
-
     pc = RTCPeerConnection()
 
     # test the js data channel
